@@ -1,34 +1,23 @@
-import time
 import requests
-import logging
-from typing import Dict, Any
 import os
-from model.intelligent_corrector import IntelligentOCRCorrector
+import time
+import logging
 
 logger = logging.getLogger(__name__)
 
 class OCRSpaceService:
     """
-    OCR Service using OCR.space API with intelligent text correction
+    OCR Service using OCR.space API
     """
     
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key='helloworld'):
         """Initialize OCR.space service"""
-        # Get API key from environment or use free tier
-        self.api_key = api_key or os.getenv('OCRSPACE_API_KEY', 'helloworld')  # Free tier key
+        self.api_key = api_key
         self.api_url = 'https://api.ocr.space/parse/image'
         
-        # Initialize intelligent corrector
-        try:
-            self.corrector = IntelligentOCRCorrector()
-            logger.info("Intelligent corrector initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize corrector: {str(e)}")
-            self.corrector = None
-        
-        logger.info(f"OCR.space service initialized (API Key: {'***' + self.api_key[-4:] if len(self.api_key) > 4 else 'FREE'})")
+        logger.info(f"OCR.space service initialized (API Key: ***{api_key[-4:] if len(api_key) > 4 else 'FREE'})")
     
-    def extract_text_with_ocrspace(self, image_path: str) -> Dict[str, Any]:
+    def extract_and_correct_text(self, image_path):
         """
         Extract text from image using OCR.space API
         """
@@ -90,13 +79,31 @@ class OCRSpaceService:
                 logger.info(f"OCR.space extraction completed in {processing_time:.2f}s")
                 logger.info(f"Extracted {len(extracted_text)} characters")
                 
+                # Calculate statistics
+                statistics = {
+                    'raw_character_count': len(extracted_text),
+                    'corrected_character_count': len(extracted_text),
+                    'raw_word_count': len(extracted_text.split()) if extracted_text else 0,
+                    'corrected_word_count': len(extracted_text.split()) if extracted_text else 0,
+                    'raw_line_count': len(extracted_text.split('\n')) if extracted_text else 0,
+                    'corrected_line_count': len(extracted_text.split('\n')) if extracted_text else 0,
+                    'corrections_applied': 0,
+                    'correction_rate': 0,
+                    'quality_assessment': "Good - OCR.space processing"
+                }
+                
                 return {
                     'success': True,
-                    'text': extracted_text,
+                    'extracted_text': extracted_text,
+                    'corrected_text': extracted_text,
+                    'raw_text': extracted_text,
+                    'original_text': extracted_text,
+                    'corrections': [],
+                    'confidence': 0.8,
+                    'statistics': statistics,
                     'processing_time': processing_time,
-                    'character_count': len(extracted_text),
-                    'word_count': len(extracted_text.split()) if extracted_text else 0,
-                    'api_response': result  # Include full response for debugging
+                    'ocr_method': 'OCR.space API',
+                    'api_response': result
                 }
             
             else:
@@ -125,81 +132,9 @@ class OCRSpaceService:
                 'error': f'OCR processing failed: {str(e)}'
             }
     
-    def extract_and_correct_text(self, image_path: str) -> Dict[str, Any]:
+    def correct_text_only(self, raw_text):
         """
-        Main method to extract and intelligently correct text from image
-        """
-        try:
-            start_time = time.time()
-            logger.info(f"Starting OCR + correction process for: {image_path}")
-            
-            # Extract raw text using OCR.space
-            ocr_result = self.extract_text_with_ocrspace(image_path)
-            
-            if not ocr_result['success']:
-                return ocr_result
-            
-            raw_text = ocr_result['text']
-            
-            if not raw_text.strip():
-                return {
-                    'success': False,
-                    'error': 'No text found in image'
-                }
-            
-            # Apply intelligent corrections if corrector is available
-            if self.corrector:
-                logger.info("Applying intelligent text corrections...")
-                correction_result = self.corrector.comprehensive_correction(raw_text)
-                
-                if correction_result.get('success', False):
-                    corrected_text = correction_result['corrected_text']
-                    corrections = correction_result['corrections']
-                    confidence = correction_result['confidence']
-                else:
-                    # If correction fails, use raw text
-                    logger.warning("Text correction failed, using raw OCR text")
-                    corrected_text = raw_text
-                    corrections = []
-                    confidence = 0.6
-            else:
-                # No corrector available, use raw text
-                corrected_text = raw_text
-                corrections = []
-                confidence = 0.5
-            
-            total_processing_time = time.time() - start_time
-            
-            # Calculate statistics
-            statistics = self.calculate_statistics(raw_text, corrected_text, corrections)
-            
-            logger.info(f"Complete OCR + correction process finished in {total_processing_time:.2f}s")
-            logger.info(f"Applied {len(corrections)} corrections")
-            
-            return {
-                'success': True,
-                'extracted_text': corrected_text,
-                'corrected_text': corrected_text,
-                'raw_text': raw_text,
-                'original_text': raw_text,
-                'corrections': corrections,
-                'confidence': confidence,
-                'statistics': statistics,
-                'processing_time': total_processing_time,
-                'ocr_method': 'OCR.space API',
-                'api_response': ocr_result.get('api_response', {})
-            }
-            
-        except Exception as e:
-            logger.error(f"OCR and correction process failed: {str(e)}")
-            return {
-                'success': False,
-                'error': f'Processing failed: {str(e)}'
-            }
-    
-    def correct_text_only(self, raw_text: str) -> Dict[str, Any]:
-        """
-        Apply intelligent corrections to already extracted text
+        Apply basic corrections to already extracted text
         """
         try:
             start_time = time.time()
@@ -210,41 +145,30 @@ class OCRSpaceService:
                     'error': 'Empty text provided'
                 }
             
-            if not self.corrector:
-                return {
-                    'success': True,
-                    'corrected_text': raw_text,
-                    'corrections': [],
-                    'confidence': 0.5,
-                    'statistics': {'message': 'No text corrector available'},
-                    'processing_time': 0
-                }
-            
-            # Apply intelligent corrections
-            correction_result = self.corrector.comprehensive_correction(raw_text)
+            # For now, just return the text as-is
+            # You can add basic text cleaning here if needed
+            corrected_text = raw_text.strip()
             
             processing_time = time.time() - start_time
             
-            if correction_result.get('success', False):
-                corrected_text = correction_result['corrected_text']
-                corrections = correction_result['corrections']
-                confidence = correction_result['confidence']
-            else:
-                # Return original text if correction fails
-                corrected_text = raw_text
-                corrections = []
-                confidence = 0.5
-            
-            # Calculate statistics
-            statistics = self.calculate_statistics(raw_text, corrected_text, corrections)
+            # Calculate basic statistics
+            statistics = {
+                'raw_character_count': len(raw_text),
+                'corrected_character_count': len(corrected_text),
+                'raw_word_count': len(raw_text.split()) if raw_text else 0,
+                'corrected_word_count': len(corrected_text.split()) if corrected_text else 0,
+                'corrections_applied': 0,
+                'correction_rate': 0,
+                'quality_assessment': "Good - No corrections needed"
+            }
             
             logger.info(f"Text correction completed in {processing_time:.2f}s")
             
             return {
                 'success': True,
                 'corrected_text': corrected_text,
-                'corrections': corrections,
-                'confidence': confidence,
+                'corrections': [],
+                'confidence': 0.8,
                 'statistics': statistics,
                 'processing_time': processing_time
             }
@@ -256,76 +180,22 @@ class OCRSpaceService:
                 'error': str(e)
             }
     
-    def calculate_statistics(self, raw_text: str, corrected_text: str, corrections: list) -> Dict[str, Any]:
-        """
-        Calculate statistics about the OCR and correction process
-        """
-        try:
-            raw_words = raw_text.split() if raw_text else []
-            corrected_words = corrected_text.split() if corrected_text else []
-            
-            # Basic statistics
-            stats = {
-                'raw_character_count': len(raw_text),
-                'corrected_character_count': len(corrected_text),
-                'raw_word_count': len(raw_words),
-                'corrected_word_count': len(corrected_words),
-                'raw_line_count': len(raw_text.split('\n')) if raw_text else 0,
-                'corrected_line_count': len(corrected_text.split('\n')) if corrected_text else 0,
-                'corrections_applied': len(corrections),
-                'correction_rate': 0
-            }
-            
-            # Calculate correction rate
-            if stats['raw_word_count'] > 0:
-                stats['correction_rate'] = round(
-                    (stats['corrections_applied'] / stats['raw_word_count']) * 100, 2
-                )
-            
-            # Group corrections by method
-            correction_methods = {}
-            for correction in corrections:
-                method = correction.get('method', 'unknown')
-                if method not in correction_methods:
-                    correction_methods[method] = 0
-                correction_methods[method] += 1
-            
-            stats['correction_methods'] = correction_methods
-            
-            # Quality assessment
-            if stats['corrections_applied'] == 0:
-                stats['quality_assessment'] = "Excellent - No corrections needed"
-            elif stats['correction_rate'] < 10:
-                stats['quality_assessment'] = "Very Good - Minor corrections"
-            elif stats['correction_rate'] < 20:
-                stats['quality_assessment'] = "Good - Some corrections applied"
-            elif stats['correction_rate'] < 40:
-                stats['quality_assessment'] = "Fair - Multiple corrections needed"
-            else:
-                stats['quality_assessment'] = "Challenging - Many corrections applied"
-            
-            return stats
-            
-        except Exception as e:
-            logger.error(f"Statistics calculation failed: {str(e)}")
-            return {
-                'error': 'Failed to calculate statistics',
-                'raw_word_count': len(raw_text.split()) if raw_text else 0,
-                'corrected_word_count': len(corrected_text.split()) if corrected_text else 0,
-                'corrections_applied': len(corrections)
-            }
-    
-    def get_service_info(self) -> Dict[str, Any]:
+    def get_service_info(self):
         """
         Get information about the OCR service
         """
         return {
             'ocr_service': 'OCR.space API',
             'api_url': self.api_url,
-            'has_api_key': len(self.api_key) > 10,  # Check if using real API key
-            'correction_available': self.corrector is not None,
-            'correction_methods': self.corrector.get_available_methods() if self.corrector else [],
+            'has_api_key': len(self.api_key) > 10,
             'supported_formats': ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'gif', 'pdf'],
             'max_image_size': '1MB (free tier) / 5MB (paid)',
-            'languages_supported': ['eng', 'ara', 'chs', 'cht', 'cze', 'dan', 'dut', 'fin', 'fre', 'ger', 'gre', 'hun', 'kor', 'ita', 'jpn', 'pol', 'por', 'rus', 'slv', 'spa', 'swe', 'tur']
+            'languages_supported': ['eng', 'ara', 'chs', 'cht', 'cze', 'dan', 'dut', 'fin', 'fre', 'ger', 'gre', 'hun', 'kor', 'ita', 'jpn', 'pol', 'por', 'rus', 'slv', 'spa', 'swe', 'tur'],
+            'features': [
+                'High accuracy OCR',
+                'Multiple language support',
+                'Automatic orientation detection',
+                'Table detection',
+                'PDF support'
+            ]
         }

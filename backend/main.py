@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  
 
-# Updated CORS to include Vercel domains
+# Updated CORS to include all origins for testing
 CORS(app, 
-     origins=['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5173', 'https://*.vercel.app', '*'],
+     origins=['*'],
      methods=['GET', 'POST', 'OPTIONS'],
      allow_headers=['Content-Type'])
 
@@ -25,7 +25,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Initialize OCR.space service
 try:
-    from services.ocrspace_service import OCRSpaceService
+    from services.service import OCRSpaceService
     
     api_key = os.getenv('OCRSPACE_API_KEY', 'helloworld')  
     ocr_service = OCRSpaceService(api_key=api_key)
@@ -119,12 +119,6 @@ def extract_text():
         file.save(file_path)
         logger.info(f"💾 File saved: {file_path}")
         
-        # Check file size (OCR.space free tier has 1MB limit)
-        file_size = os.path.getsize(file_path)
-        if file_size > 1024 * 1024:  # 1MB
-            logger.warning(f"File size too large: {file_size} bytes")
-            # Don't fail immediately, let OCR.space handle it
-        
         logger.info(f"🚀 Processing OCR with OCR.space for: {unique_filename}")
         
         # Extract text using OCR.space service
@@ -186,98 +180,16 @@ def extract_text():
             'error': f'Server error: {str(e)}'
         }), 500
 
-@app.route('/api/correct-text', methods=['POST', 'OPTIONS'])
-def correct_text():
-    """Text correction endpoint"""
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    try:
-        if not ocr_service:
-            return jsonify({
-                'success': False,
-                'error': 'OCR service not available'
-            }), 500
-
-        data = request.get_json()
-        
-        if not data or 'text' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'No text provided'
-            }), 400
-
-        raw_text = data['text']
-        
-        if not raw_text.strip():
-            return jsonify({
-                'success': False,
-                'error': 'Empty text provided'
-            }), 400
-
-        logger.info(f"Processing text correction. Text length: {len(raw_text)}")
-        
-        # Apply intelligent corrections
-        result = ocr_service.correct_text_only(raw_text)
-        
-        if result.get('success', False):
-            return jsonify({
-                'success': True,
-                'corrected_text': result.get('corrected_text', raw_text),
-                'corrections': result.get('corrections', []),
-                'statistics': result.get('statistics', {}),
-                'confidence': result.get('confidence', 0.8)
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': result.get('error', 'Text correction failed')
-            }), 500
-
-    except Exception as e:
-        logger.error(f"Text correction error: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'Failed to correct text: {str(e)}'
-        }), 500
-
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get server status and capabilities"""
-    service_info = ocr_service.get_service_info() if ocr_service else {}
-    
     return jsonify({
         'status': 'running',
         'ocr_service': 'OCR.space API',
         'ocr_service_ready': ocr_service is not None,
         'supported_formats': list(ALLOWED_EXTENSIONS),
         'max_file_size': '16MB (server) / 1MB (OCR.space free tier)',
-        'version': '2.0.0',
-        'service_details': service_info
-    })
-
-@app.route('/api/api-info', methods=['GET'])
-def get_api_info():
-    """Get OCR.space API information and usage"""
-    if not ocr_service:
-        return jsonify({
-            'error': 'OCR service not available'
-        }), 500
-    
-    return jsonify({
-        'service': 'OCR.space API',
-        'free_tier_limit': '25,000 requests/month',
-        'file_size_limit': '1MB (free) / 5MB (paid)',
-        'supported_languages': ['English', 'Arabic', 'Chinese (Simplified)', 'Chinese (Traditional)', 'Czech', 'Danish', 'Dutch', 'Finnish', 'French', 'German', 'Greek', 'Hungarian', 'Korean', 'Italian', 'Japanese', 'Polish', 'Portuguese', 'Russian', 'Slovenian', 'Spanish', 'Swedish', 'Turkish'],
-        'features': [
-            'High accuracy OCR',
-            'Multiple language support', 
-            'Automatic orientation detection',
-            'Table detection',
-            'PDF support',
-            'Intelligent text correction'
-        ],
-        'api_key_configured': len(ocr_service.api_key) > 10 if ocr_service else False
+        'version': '2.0.0'
     })
 
 @app.errorhandler(413)
