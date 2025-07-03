@@ -36,7 +36,7 @@ const App = () => {
       const formData = new FormData();
       formData.append('file', imageFile);
 
-      const response = await fetch('/api/extract-text', {
+      const response = await fetch('https://ocr-backend-sdlt.onrender.com/api/extract-text', {
         method: 'POST',
         body: formData,
       });
