@@ -4,6 +4,7 @@ from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
 import logging
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  
 
-# Updated CORS to include all origins for testing
+# CORS setup
 CORS(app, 
      origins=['*'],
      methods=['GET', 'POST', 'OPTIONS'],
@@ -23,15 +24,101 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'pdf'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize OCR.space service
-try:
-    from services.service import OCRSpaceService
+# OCR Service Class - Embedded directly in main.py
+class OCRSpaceService:
+    def __init__(self, api_key='helloworld'):
+        self.api_key = api_key
+        self.api_url = 'https://api.ocr.space/parse/image'
+        logger.info(f"OCR.space service initialized with API key")
     
-    api_key = os.getenv('OCRSPACE_API_KEY', 'helloworld')  
+    def extract_and_correct_text(self, image_path):
+        try:
+            logger.info(f"Starting OCR processing for: {image_path}")
+            
+            with open(image_path, 'rb') as image_file:
+                files = {'file': image_file}
+                data = {
+                    'apikey': self.api_key,
+                    'language': 'eng',
+                    'OCREngine': 2,
+                    'detectOrientation': True,
+                    'isOverlayRequired': False
+                }
+                
+                response = requests.post(self.api_url, files=files, data=data, timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    if result.get('IsErroredOnProcessing', True):
+                        error_msg = result.get('ErrorMessage', ['Unknown error'])
+                        if isinstance(error_msg, list):
+                            error_msg = ', '.join(error_msg)
+                        logger.error(f"OCR.space error: {error_msg}")
+                        return {'success': False, 'error': f'OCR error: {error_msg}'}
+                    
+                    # Extract text
+                    extracted_text = ""
+                    parsed_results = result.get('ParsedResults', [])
+                    
+                    for parsed_result in parsed_results:
+                        text = parsed_result.get('ParsedText', '')
+                        if text:
+                            extracted_text += text
+                    
+                    extracted_text = extracted_text.strip()
+                    
+                    if not extracted_text:
+                        return {'success': False, 'error': 'No text found in image'}
+                    
+                    logger.info(f"OCR completed successfully. Text length: {len(extracted_text)}")
+                    
+                    return {
+                        'success': True,
+                        'extracted_text': extracted_text,
+                        'corrected_text': extracted_text,
+                        'raw_text': extracted_text,
+                        'original_text': extracted_text,
+                        'corrections': [],
+                        'confidence': 0.8,
+                        'statistics': {
+                            'raw_word_count': len(extracted_text.split()),
+                            'corrected_word_count': len(extracted_text.split()),
+                            'corrections_applied': 0,
+                            'quality_assessment': 'Good'
+                        },
+                        'processing_time': 1.0
+                    }
+                else:
+                    logger.error(f"OCR API request failed: {response.status_code}")
+                    return {'success': False, 'error': f'API request failed: {response.status_code}'}
+                    
+        except requests.exceptions.Timeout:
+            logger.error("OCR API timeout")
+            return {'success': False, 'error': 'OCR timeout. Try a smaller image.'}
+        except Exception as e:
+            logger.error(f"OCR processing error: {str(e)}")
+            return {'success': False, 'error': f'OCR error: {str(e)}'}
+    
+    def correct_text_only(self, text):
+        return {
+            'success': True,
+            'corrected_text': text,
+            'corrections': [],
+            'confidence': 0.8,
+            'statistics': {'raw_word_count': len(text.split())}
+        }
+    
+    def get_service_info(self):
+        return {'service': 'OCR.space', 'ready': True}
+
+# Initialize OCR service
+try:
+    api_key = os.getenv('OCRSPACE_API_KEY', 'helloworld')
     ocr_service = OCRSpaceService(api_key=api_key)
-    logger.info("OCR.space Service initialized successfully")
+    logger.info("✅ OCR.space Service initialized successfully!")
 except Exception as e:
-    logger.error(f"Failed to initialize OCR.space service: {str(e)}")
+    logger.error(f"❌ Failed to initialize OCR.space service: {str(e)}")
     ocr_service = None
 
 def allowed_file(filename, allowed_extensions):
@@ -62,13 +149,13 @@ def test_endpoint():
         'success': True,
         'message': 'Backend connection working with OCR.space!',
         'timestamp': time.time(),
-        'ocr_service': 'OCR.space API'
+        'ocr_service': 'OCR.space API',
+        'service_ready': ocr_service is not None
     })
 
 @app.route('/api/extract-text', methods=['POST', 'OPTIONS'])
 def extract_text():
     """OCR text extraction endpoint using OCR.space"""
-    # Handle preflight CORS request
     if request.method == 'OPTIONS':
         return '', 200
     
@@ -77,10 +164,10 @@ def extract_text():
     try:
         # Check if OCR service is available
         if not ocr_service:
-            logger.error("OCR.space service not initialized")
+            logger.error("❌ OCR.space service not initialized")
             return jsonify({
                 'success': False,
-                'error': 'OCR service not available. Check server configuration.'
+                'error': 'OCR service not available. Service initialization failed.'
             }), 500
 
         # Check if file is in request
@@ -119,18 +206,10 @@ def extract_text():
         file.save(file_path)
         logger.info(f"💾 File saved: {file_path}")
         
+        # Process OCR
         logger.info(f"🚀 Processing OCR with OCR.space for: {unique_filename}")
         
-        # Extract text using OCR.space service
-        try:
-            result = ocr_service.extract_and_correct_text(file_path)
-            logger.info(f"OCR.space processing result: {result.get('success', False)}")
-        except Exception as ocr_error:
-            logger.error(f"OCR.space processing failed: {str(ocr_error)}")
-            result = {
-                'success': False,
-                'error': f'OCR processing failed: {str(ocr_error)}'
-            }
+        result = ocr_service.extract_and_correct_text(file_path)
         
         # Cleanup temporary file
         try:
@@ -140,31 +219,16 @@ def extract_text():
             logger.warning(f"Failed to cleanup file: {cleanup_error}")
         
         if result.get('success', False):
-            extracted_text = result.get('extracted_text', result.get('corrected_text', ''))
+            extracted_text = result.get('extracted_text', '')
             logger.info(f"✅ OCR completed successfully. Text length: {len(extracted_text)}")
             
-            # Ensure we have the required fields
-            response_data = {
-                'success': True,
-                'extracted_text': extracted_text,
-                'corrected_text': extracted_text,
-                'original_text': result.get('raw_text', result.get('original_text', '')),
-                'raw_text': result.get('raw_text', result.get('original_text', '')),
-                'corrections': result.get('corrections', []),
-                'statistics': result.get('statistics', {}),
-                'confidence': result.get('confidence', 0.8),
-                'processing_time': result.get('processing_time', 0),
-                'ocr_service': 'OCR.space API'
-            }
-            
-            # If no text was extracted
             if not extracted_text.strip():
                 return jsonify({
                     'success': False,
-                    'error': 'No text found in the image. Please try with a clearer image containing readable text.'
+                    'error': 'No text found in the image. Please try with a clearer image.'
                 }), 400
             
-            return jsonify(response_data)
+            return jsonify(result)
         else:
             error_msg = result.get('error', 'Unknown OCR processing error')
             logger.error(f"❌ OCR.space failed: {error_msg}")
@@ -194,31 +258,20 @@ def get_status():
 
 @app.errorhandler(413)
 def file_too_large(error):
-    """Handle file too large error"""
     return jsonify({
         'success': False,
-        'error': 'File too large. Maximum size is 16MB (server limit). OCR.space free tier supports up to 1MB.'
+        'error': 'File too large. Maximum size is 16MB.'
     }), 413
 
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors"""
     return jsonify({
         'success': False,
         'error': 'Endpoint not found'
     }), 404
 
-@app.errorhandler(405)
-def method_not_allowed(error):
-    """Handle method not allowed errors"""
-    return jsonify({
-        'success': False,
-        'error': 'Method not allowed for this endpoint'
-    }), 405
-
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle internal server errors"""
     logger.error(f"Internal server error: {error}")
     return jsonify({
         'success': False,
@@ -235,7 +288,6 @@ if __name__ == '__main__':
         api_key = os.getenv('OCRSPACE_API_KEY', 'helloworld')
         if api_key == 'helloworld':
             logger.info("🆓 Using OCR.space free tier (25,000 requests/month)")
-            logger.info("💡 For higher limits, set OCRSPACE_API_KEY environment variable")
         else:
             logger.info("🔑 Using custom OCR.space API key")
     
