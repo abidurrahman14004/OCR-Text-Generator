@@ -8,27 +8,24 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  
 
-
+# Updated CORS to include Vercel domains
 CORS(app, 
-     origins=['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'],
+     origins=['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:5173', 'https://*.vercel.app', '*'],
      methods=['GET', 'POST', 'OPTIONS'],
      allow_headers=['Content-Type'])
-
 
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'pdf'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-
+# Initialize OCR.space service
 try:
-    from services.service import OCRSpaceService
+    from services.ocrspace_service import OCRSpaceService
     
     api_key = os.getenv('OCRSPACE_API_KEY', 'helloworld')  
     ocr_service = OCRSpaceService(api_key=api_key)
@@ -71,14 +68,14 @@ def test_endpoint():
 @app.route('/api/extract-text', methods=['POST', 'OPTIONS'])
 def extract_text():
     """OCR text extraction endpoint using OCR.space"""
- 
+    # Handle preflight CORS request
     if request.method == 'OPTIONS':
         return '', 200
     
     logger.info("🔍 OCR.space endpoint called!")
     
     try:
-  
+        # Check if OCR service is available
         if not ocr_service:
             logger.error("OCR.space service not initialized")
             return jsonify({
@@ -86,7 +83,7 @@ def extract_text():
                 'error': 'OCR service not available. Check server configuration.'
             }), 500
 
-   
+        # Check if file is in request
         if 'file' not in request.files:
             logger.warning("❌ No file in request")
             return jsonify({
@@ -97,7 +94,7 @@ def extract_text():
         file = request.files['file']
         logger.info(f"📁 Received file: {file.filename}")
         
- 
+        # Check if file is selected
         if file.filename == '':
             logger.warning("❌ No file selected")
             return jsonify({
@@ -105,7 +102,7 @@ def extract_text():
                 'error': 'No file selected'
             }), 400
 
-
+        # Validate file type
         if not allowed_file(file.filename, ALLOWED_EXTENSIONS):
             logger.warning(f"❌ Invalid file type: {file.filename}")
             return jsonify({
@@ -113,7 +110,7 @@ def extract_text():
                 'error': 'Invalid file type. Allowed: ' + ', '.join(ALLOWED_EXTENSIONS)
             }), 400
 
-   
+        # Save temporary file
         filename = secure_filename(file.filename)
         timestamp = str(int(time.time()))
         unique_filename = f"{timestamp}_{filename}"
@@ -122,15 +119,15 @@ def extract_text():
         file.save(file_path)
         logger.info(f"💾 File saved: {file_path}")
         
-
+        # Check file size (OCR.space free tier has 1MB limit)
         file_size = os.path.getsize(file_path)
         if file_size > 1024 * 1024:  # 1MB
             logger.warning(f"File size too large: {file_size} bytes")
-
+            # Don't fail immediately, let OCR.space handle it
         
         logger.info(f"🚀 Processing OCR with OCR.space for: {unique_filename}")
         
-
+        # Extract text using OCR.space service
         try:
             result = ocr_service.extract_and_correct_text(file_path)
             logger.info(f"OCR.space processing result: {result.get('success', False)}")
@@ -140,7 +137,8 @@ def extract_text():
                 'success': False,
                 'error': f'OCR processing failed: {str(ocr_error)}'
             }
-   
+        
+        # Cleanup temporary file
         try:
             os.remove(file_path)
             logger.info(f"🗑️ Cleaned up temporary file: {file_path}")
@@ -151,7 +149,7 @@ def extract_text():
             extracted_text = result.get('extracted_text', result.get('corrected_text', ''))
             logger.info(f"✅ OCR completed successfully. Text length: {len(extracted_text)}")
             
-   
+            # Ensure we have the required fields
             response_data = {
                 'success': True,
                 'extracted_text': extracted_text,
@@ -165,7 +163,7 @@ def extract_text():
                 'ocr_service': 'OCR.space API'
             }
             
-          
+            # If no text was extracted
             if not extracted_text.strip():
                 return jsonify({
                     'success': False,
@@ -219,7 +217,7 @@ def correct_text():
 
         logger.info(f"Processing text correction. Text length: {len(raw_text)}")
         
-
+        # Apply intelligent corrections
         result = ocr_service.correct_text_only(raw_text)
         
         if result.get('success', False):
@@ -330,9 +328,10 @@ if __name__ == '__main__':
             logger.info("🔑 Using custom OCR.space API key")
     
     # Run the app
+    port = int(os.environ.get('PORT', 5000))
     app.run(
-        debug=True,
+        debug=False,
         host='0.0.0.0',
-        port=5000,
+        port=port,
         threaded=True
-    )
+    )g
