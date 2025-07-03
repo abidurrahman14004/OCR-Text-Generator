@@ -36,7 +36,7 @@ const App = () => {
       const formData = new FormData();
       formData.append('file', imageFile);
 
-      const response = await fetch('http://127.0.0.1:5000/api/extract-text', {
+      const response = await fetch('/api/extract-text', {
         method: 'POST',
         body: formData,
       });
